@@ -91,9 +91,10 @@ class HistoryManager:
     # Create / update
     # ------------------------------------------------------------------
     def create_conversation(self, model: str, first_message: str = "") -> Conversation:
-        """Create and persist a brand-new, empty conversation."""
+        """Create a brand-new, empty conversation. It isn't stored until the
+        first save_conversation, so unused chats never reach the history."""
         now = datetime.now().isoformat()
-        conv = Conversation(
+        return Conversation(
             id=str(uuid.uuid4()),
             title=self._generate_title(first_message),
             model=model,
@@ -101,24 +102,19 @@ class HistoryManager:
             updated_at=now,
             messages=[],
         )
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO conversations (id, title, model, created_at, "
-                "updated_at, messages) VALUES (?, ?, ?, ?, ?, ?)",
-                (conv.id, conv.title, conv.model, conv.created_at,
-                 conv.updated_at, json.dumps(conv.messages)),
-            )
-        return conv
 
     def save_conversation(self, conv: Conversation) -> None:
-        """Persist an updated conversation (messages, title, model)."""
+        """Persist a new or updated conversation (messages, title, model)."""
         conv.updated_at = datetime.now().isoformat()
         with self._connect() as conn:
             conn.execute(
-                "UPDATE conversations SET title=?, model=?, updated_at=?, "
-                "messages=? WHERE id=?",
-                (conv.title, conv.model, conv.updated_at,
-                 json.dumps(conv.messages), conv.id),
+                "INSERT INTO conversations (id, title, model, created_at, "
+                "updated_at, messages) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET title=excluded.title, "
+                "model=excluded.model, updated_at=excluded.updated_at, "
+                "messages=excluded.messages",
+                (conv.id, conv.title, conv.model, conv.created_at,
+                 conv.updated_at, json.dumps(conv.messages)),
             )
 
     def rename_conversation(self, conv_id: str, new_title: str) -> None:

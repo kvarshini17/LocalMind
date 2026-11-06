@@ -16,11 +16,14 @@ from core.history import HistoryManager
 from core.ollama_client import OllamaClient
 from core.pdf_chat import PDFChatEngine, PDFProcessingError
 from components.export import EXPORTERS, export_all_history
-from utils.constants import UPLOADS_DIR, DATABASE_DIR, EXPORTS_DIR, MAX_PDF_SIZE_MB, \
-    EXPORT_FORMATS
+from utils.constants import APP_TAGLINE, APP_TITLE, UPLOADS_DIR, DATABASE_DIR, EXPORTS_DIR, \
+    MAX_PDF_SIZE_MB, EXPORT_FORMATS
 from utils.file_utils import (
     get_directory_size, human_readable_size, load_settings, save_settings,
+    timestamped_filename,
 )
+
+EXPORT_EXTENSIONS = {"TXT": "txt", "Markdown": "md", "PDF": "pdf", "JSON": "json"}
 
 
 def render_sidebar(
@@ -30,14 +33,12 @@ def render_sidebar(
 ) -> None:
     """Render the entire sidebar. Mutates st.session_state to drive app.py."""
     with st.sidebar:
-        st.markdown('<h2 class="accent-header">✨ OFFGRID AI</h2>', unsafe_allow_html=True)
+        st.markdown(f'<h2 class="accent-header">✨ {APP_TITLE}</h2>', unsafe_allow_html=True)
+        st.markdown(f'<p class="app-tagline muted-text">{APP_TAGLINE}</p>', unsafe_allow_html=True)
 
         _render_new_chat_button(history)
-        st.divider()
 
         _render_pdf_manager(pdf_engine)
-        st.divider()
-
         _render_export_panel(history)
         st.divider()
 
@@ -84,21 +85,23 @@ def _render_search_and_history(history: HistoryManager) -> None:
 
 def _render_history_item(history: HistoryManager, conv) -> None:
     is_active = st.session_state.get("current_conv_id") == conv.id
-    cols = st.columns([0.7, 0.15, 0.15])
+    row = st.container(horizontal=True, vertical_alignment="center", gap=None,
+                       key=f"history_row_{conv.id}")
 
-    with cols[0]:
+    with row:
         label = f"**{conv.title}**" if is_active else conv.title
-        if st.button(label, key=f"open_{conv.id}", use_container_width=True):
+        if st.button(label, key=f"open_{conv.id}", type="tertiary", width="stretch",
+                     help=conv.title):
             st.session_state.current_conv_id = conv.id
             st.session_state.pdf_mode = False
             st.rerun()
 
-    with cols[1]:
-        if st.button("✏️", key=f"rename_{conv.id}", help="Rename"):
+        if st.button("", icon=":material/edit:", key=f"rename_{conv.id}",
+                     type="tertiary", help="Rename"):
             st.session_state[f"renaming_{conv.id}"] = True
 
-    with cols[2]:
-        if st.button("🗑️", key=f"delete_{conv.id}", help="Delete"):
+        if st.button("", icon=":material/delete:", key=f"delete_{conv.id}",
+                     type="tertiary", help="Delete"):
             history.delete_conversation(conv.id)
             if st.session_state.get("current_conv_id") == conv.id:
                 st.session_state.current_conv_id = None
@@ -155,7 +158,7 @@ def _render_pdf_manager(pdf_engine: PDFChatEngine) -> None:
             for pdf_path in existing_pdfs:
                 size = human_readable_size(pdf_path.stat().st_size)
                 col1, col2 = st.columns([0.8, 0.2])
-                col1.markdown(f"📄 {pdf_path.name}  \n<span style='color:#8B949E;font-size:0.8em'>{size}</span>",
+                col1.markdown(f"📄 {pdf_path.name}  \n<span class='muted-text' style='font-size:0.8em'>{size}</span>",
                                unsafe_allow_html=True)
                 if col2.button("🗑️", key=f"del_pdf_{pdf_path.name}"):
                     try:
@@ -183,21 +186,24 @@ def _render_export_panel(history: HistoryManager) -> None:
         if conv_id:
             current_conv = history.get_conversation(conv_id)
 
+        # Exports are built lazily on click, not on every rerun of the page.
         if current_conv and current_conv.messages:
-            filename, data = EXPORTERS[fmt](current_conv)
             st.download_button(
-                "Export Current Chat", data=data, file_name=filename,
-                use_container_width=True,
+                "Export Current Chat",
+                data=lambda: EXPORTERS[fmt](current_conv)[1],
+                file_name=timestamped_filename(current_conv.title, EXPORT_EXTENSIONS[fmt]),
+                on_click="ignore", use_container_width=True,
             )
         else:
             st.caption("No active chat to export yet.")
 
         all_convs = history.list_conversations()
         if all_convs:
-            filename, data = export_all_history(all_convs, fmt)
             st.download_button(
-                "Export Entire History", data=data, file_name=filename,
-                use_container_width=True,
+                "Export Entire History",
+                data=lambda: export_all_history(all_convs, fmt)[1],
+                file_name=timestamped_filename("chat-history", EXPORT_EXTENSIONS[fmt]),
+                on_click="ignore", use_container_width=True,
             )
 
 
@@ -216,16 +222,16 @@ def _render_settings_panel(ollama_client: OllamaClient) -> None:
         temperature = st.slider("Temperature", 0.0, 1.5, float(settings["temperature"]), 0.05)
         max_tokens = st.slider("Max Tokens", 128, 8192, int(settings["max_tokens"]), 128)
         top_p = st.slider("Top P", 0.0, 1.0, float(settings["top_p"]), 0.05)
-        theme = st.selectbox("Theme", ["Dark", "Light (coming soon)"],
-                              index=0 if settings["theme"] == "Dark" else 0, disabled=True)
-        typing_speed = st.slider("Typing Speed (ms/word)", 5, 100, int(settings["typing_speed_ms"]), 5)
+        typing_speed = st.slider("Typing Delay (ms/chunk, 0 = fastest)", 0, 100,
+                                 int(settings["typing_speed_ms"]), 5)
         font_size = st.selectbox("Font Size", ["Small", "Medium", "Large"],
                                   index=["Small", "Medium", "Large"].index(settings["font_size"]))
+        st.caption("Theme: choose System, Light, or Dark in the ⋮ menu at the top right.")
 
         if st.button("Save Settings", use_container_width=True):
             save_settings({
                 "model": model, "temperature": temperature, "max_tokens": max_tokens,
-                "top_p": top_p, "theme": "Dark", "typing_speed_ms": typing_speed,
+                "top_p": top_p, "typing_speed_ms": typing_speed,
                 "font_size": font_size,
             })
             st.success("Settings saved.")
@@ -251,8 +257,8 @@ def _render_status_and_about() -> None:
 
     with st.expander("ℹ️ About", expanded=False):
         st.markdown(
-            """
-            **AI Assistant** is a local, privacy-friendly chatbot powered by
+            f"""
+            **{APP_TITLE}** is a local, privacy-friendly chatbot powered by
             [Ollama](https://ollama.com) and Streamlit, with document
             question-answering (RAG) over your own PDFs.
 

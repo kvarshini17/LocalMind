@@ -29,8 +29,16 @@ for _dir in (DATABASE_DIR, UPLOADS_DIR, EXPORTS_DIR, VECTORSTORE_DIR):
 # --------------------------------------------------------------------------
 # Ollama configuration
 # --------------------------------------------------------------------------
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-DEFAULT_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", "llama3.2:latest")
+# 127.0.0.1 rather than "localhost": on Windows, localhost tries IPv6 (::1)
+# first, which Ollama doesn't listen on, adding ~2s to every request.
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+DEFAULT_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", "llama3.2:3b")
+# How long Ollama keeps the model in memory after a request. The default
+# (5m) means the first message after a short break pays a full reload.
+OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "30m")
+# Only the most recent messages are sent as context, so long chats stay fast
+# and the system prompt never gets truncated out of the context window.
+MAX_HISTORY_MESSAGES = 12
 
 # --------------------------------------------------------------------------
 # RAG / PDF chat configuration
@@ -47,20 +55,43 @@ NO_ANSWER_MESSAGE = (
 # --------------------------------------------------------------------------
 # UI / theme configuration
 # --------------------------------------------------------------------------
-APP_TITLE = "AI Assistant"
+APP_TITLE = "LocalMind"
+APP_TAGLINE = "Your Intelligence. Your Device. Your Privacy."
 APP_ICON = "🤖"
 
-COLOR_BACKGROUND = "#0E1117"
-COLOR_SIDEBAR = "#161B22"
-COLOR_CARD = "#1E1E1E"
 COLOR_USER_BUBBLE = "#2563EB"
-COLOR_ASSISTANT_BUBBLE = "#262B33"
 COLOR_ACCENT_GRADIENT = "linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)"
-COLOR_TEXT = "#E6EDF3"
-COLOR_MUTED_TEXT = "#8B949E"
-COLOR_BORDER = "#30363D"
 
-DEFAULT_TYPING_SPEED_MS = 25  # milliseconds per word
+# Colors for the custom CSS, keyed by Streamlit's theme type. Page and sidebar
+# backgrounds live in .streamlit/config.toml; keep the two files in sync.
+THEME_COLORS = {
+    "dark": {
+        "card": "#1E1E1E",
+        "assistant_bubble": "#262B33",
+        "text": "#E6EDF3",
+        "muted_text": "#8B949E",
+        "border": "#30363D",
+        "row_hover": "#2A2B32",
+        "row_text": "#D1D5DB",
+        "row_text_hover": "#FFFFFF",
+        "shadow": "rgba(0,0,0,0.25)",
+        "shadow_hover": "rgba(0,0,0,0.35)",
+    },
+    "light": {
+        "card": "#F6F8FA",
+        "assistant_bubble": "#F1F3F5",
+        "text": "#1F2328",
+        "muted_text": "#57606A",
+        "border": "#D0D7DE",
+        "row_hover": "#E8EBEF",
+        "row_text": "#24292F",
+        "row_text_hover": "#000000",
+        "shadow": "rgba(0,0,0,0.08)",
+        "shadow_hover": "rgba(0,0,0,0.14)",
+    },
+}
+
+DEFAULT_TYPING_SPEED_MS = 0  # extra delay per word; 0 = show text as fast as it arrives
 DEFAULT_FONT_SIZE = "Medium"
 
 # --------------------------------------------------------------------------

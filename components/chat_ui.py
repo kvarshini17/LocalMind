@@ -1,7 +1,7 @@
 """
 chat_ui.py
 ==========
-Renders the main chat window: custom dark theme CSS, scrollable message
+Renders the main chat window: custom light/dark theme CSS, scrollable message
 list with styled bubbles, and the sticky bottom input. Also renders the
 PDF-chat source citations.
 """
@@ -12,18 +12,20 @@ import streamlit as st
 
 from core.history import Conversation
 from core.pdf_chat import RetrievedChunk
-from utils.constants import (
-    COLOR_BACKGROUND, COLOR_SIDEBAR, COLOR_CARD, COLOR_USER_BUBBLE,
-    COLOR_ASSISTANT_BUBBLE, COLOR_ACCENT_GRADIENT, COLOR_TEXT,
-    COLOR_MUTED_TEXT, COLOR_BORDER,
-)
+from utils.constants import COLOR_ACCENT_GRADIENT, COLOR_USER_BUBBLE, THEME_COLORS
 
 FONT_SIZE_MAP = {"Small": "14px", "Medium": "16px", "Large": "18px"}
 
 
 def inject_custom_css(font_size: str = "Medium") -> None:
-    """Inject the app's dark-mode theme and chat-bubble styling."""
+    """Inject the app's theme-aware chat-bubble and component styling."""
     base_font = FONT_SIZE_MAP.get(font_size, "16px")
+    # Resolved by the browser: changing the theme in Streamlit's menu updates
+    # .stApp's color-scheme immediately but doesn't rerun this script.
+    colors = {
+        name: f"light-dark({THEME_COLORS['light'][name]}, {dark_value})"
+        for name, dark_value in THEME_COLORS["dark"].items()
+    }
     st.markdown(
         f"""
         <style>
@@ -34,14 +36,17 @@ def inject_custom_css(font_size: str = "Medium") -> None:
             font-size: {base_font};
         }}
 
-        .stApp {{
-            background-color: {COLOR_BACKGROUND};
-            color: {COLOR_TEXT};
+        section[data-testid="stSidebar"] {{
+            border-right: 1px solid {colors["border"]};
         }}
 
-        section[data-testid="stSidebar"] {{
-            background-color: {COLOR_SIDEBAR};
-            border-right: 1px solid {COLOR_BORDER};
+        .muted-text {{
+            color: {colors["muted_text"]};
+        }}
+
+        section[data-testid="stSidebar"] p.app-tagline {{
+            font-size: 11.5px;
+            margin: -0.75rem 0 0.25rem;
         }}
 
         /* Chat bubbles */
@@ -51,7 +56,7 @@ def inject_custom_css(font_size: str = "Medium") -> None:
             margin-bottom: 10px;
             max-width: 80%;
             line-height: 1.5;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+            box-shadow: 0 2px 8px {colors["shadow"]};
             animation: fadeIn 0.25s ease-in-out;
             word-wrap: break-word;
         }}
@@ -64,11 +69,11 @@ def inject_custom_css(font_size: str = "Medium") -> None:
         }}
 
         .assistant-bubble {{
-            background-color: {COLOR_ASSISTANT_BUBBLE};
-            color: {COLOR_TEXT};
+            background-color: {colors["assistant_bubble"]};
+            color: {colors["text"]};
             margin-right: auto;
             border-bottom-left-radius: 4px;
-            border: 1px solid {COLOR_BORDER};
+            border: 1px solid {colors["border"]};
         }}
 
         .bubble-row {{
@@ -82,22 +87,22 @@ def inject_custom_css(font_size: str = "Medium") -> None:
         }}
 
         .thinking-indicator {{
-            color: {COLOR_MUTED_TEXT};
+            color: {colors["muted_text"]};
             font-style: italic;
             padding: 8px 4px;
         }}
 
         /* Cards used in settings / about / PDF list */
         .app-card {{
-            background-color: {COLOR_CARD};
-            border: 1px solid {COLOR_BORDER};
+            background-color: {colors["card"]};
+            border: 1px solid {colors["border"]};
             border-radius: 12px;
             padding: 16px;
             margin-bottom: 12px;
             transition: box-shadow 0.2s ease-in-out;
         }}
         .app-card:hover {{
-            box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+            box-shadow: 0 4px 14px {colors["shadow_hover"]};
         }}
 
         /* Gradient accent header */
@@ -111,73 +116,72 @@ def inject_custom_css(font_size: str = "Medium") -> None:
         /* Streamlit Button Overrides */
         .stButton > button {{
             border-radius: 8px;
-            border: 1px solid {COLOR_BORDER};
+            border: 1px solid {colors["border"]};
             transition: all 0.15s ease-in-out;
         }}
         .stButton > button:hover {{
             border-color: #8B5CF6;
         }}
         
-        /* ChatGPT-style Sidebar Buttons */
-        section[data-testid="stSidebar"] [data-testid="baseButton-secondary"] {{
-            background-color: transparent !important;
-            border: none !important;
-            box-shadow: none !important;
-            text-align: left !important;
-            padding: 4px 8px !important;
-            justify-content: flex-start !important;
-            border-radius: 8px !important;
-            color: #d1d5db !important;
-            font-weight: 400 !important;
+        /* ChatGPT-style sidebar history rows: one line, left-aligned title,
+           compact icon actions vertically centred on the same line. */
+        [class*="st-key-history_row_"] {{
+            border-radius: 8px;
+            padding: 0 4px 0 8px;
+            margin-bottom: -0.75rem;
         }}
-        section[data-testid="stSidebar"] [data-testid="baseButton-secondary"]:hover {{
-            background-color: #2a2b32 !important;
-            color: #ffffff !important;
+        [class*="st-key-history_row_"]:hover {{
+            background-color: {colors["row_hover"]};
         }}
-        
-        /* Sidebar Primary Button (New Chat) */
-        section[data-testid="stSidebar"] [data-testid="baseButton-primary"] {{
-            background-color: transparent !important;
-            border: none !important;
-            text-align: left !important;
-            justify-content: flex-start !important;
-            padding: 8px !important;
-            border-radius: 8px !important;
-            color: #ffffff !important;
-            font-weight: 500 !important;
+        [class*="st-key-history_row_"] {{
+            flex-wrap: nowrap;
         }}
-        section[data-testid="stSidebar"] [data-testid="baseButton-primary"]:hover {{
-            background-color: #2a2b32 !important;
+        [class*="st-key-history_row_"] > div {{
+            min-width: 0;
+        }}
+        [class*="st-key-history_row_"] > [class*="st-key-open_"] {{
+            flex: 1 1 0;
+        }}
+        [class*="st-key-open_"] .stButton,
+        [class*="st-key-open_"] .stTooltipIcon,
+        [class*="st-key-open_"] .stTooltipHoverTarget {{
+            width: 100%;
+            min-width: 0;
+        }}
+        [class*="st-key-history_row_"] [data-testid="stBaseButton-tertiary"] {{
+            min-height: 2.25rem;
+            color: {colors["row_text"]};
+        }}
+        [class*="st-key-history_row_"] [data-testid="stBaseButton-tertiary"]:hover {{
+            color: {colors["row_text_hover"]};
+        }}
+        [class*="st-key-open_"] [data-testid="stBaseButton-tertiary"] {{
+            justify-content: flex-start;
+            min-width: 0;
+            width: 100%;
+        }}
+        [class*="st-key-open_"] [data-testid="stBaseButton-tertiary"] > div,
+        [class*="st-key-open_"] [data-testid="stBaseButton-tertiary"] > div > span {{
+            justify-content: flex-start;
+            min-width: 0;
+        }}
+        [class*="st-key-open_"] [data-testid="stBaseButton-tertiary"] p {{
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-align: left;
         }}
 
         /* Source citation chips */
         .source-chip {{
             display: inline-block;
-            background-color: {COLOR_CARD};
-            border: 1px solid {COLOR_BORDER};
+            background-color: {colors["card"]};
+            border: 1px solid {colors["border"]};
             border-radius: 8px;
             padding: 4px 10px;
             margin: 2px 4px 2px 0;
             font-size: 0.85em;
-            color: {COLOR_MUTED_TEXT};
-        }}
-
-        /* Sticky-feeling chat input */
-        div[data-testid="stChatInput"] {{
-            background-color: #212121 !important;
-            border: 1px solid #424242 !important;
-            border-radius: 24px !important;
-            padding-left: 12px !important;
-        }}
-
-        div[data-testid="stChatInput"] textarea {{
-            background-color: transparent !important;
-            color: #FFFFFF !important;
-            caret-color: #FFFFFF !important;
-        }}
-
-        div[data-testid="stChatInput"] textarea::placeholder {{
-            color: #888888 !important;
+            color: {colors["muted_text"]};
         }}
 
         /* Scrollable chat container */
@@ -199,18 +203,19 @@ def render_message(role: str, content: str, msg_idx: int = 0) -> None:
     )
     if role == "assistant":
         from components.export import export_text_to_pdf
-        pdf_data = export_text_to_pdf(content)
-        cols = st.columns([0.02, 0.3, 0.68])
-        with cols[1]:
-            st.download_button(
-                label="📄 Download Response as PDF",
-                data=pdf_data,
-                file_name=f"response_{msg_idx}.pdf",
-                mime="application/pdf",
-                key=f"dl_pdf_msg_{msg_idx}",
-                help="Download this response as a PDF document",
-                use_container_width=True
-            )
+        # Build the PDF only when clicked; building one per message on every
+        # rerun made opening a long chat take 10+ seconds.
+        st.download_button(
+            label="Download as PDF",
+            icon=":material/download:",
+            type="tertiary",
+            data=lambda: export_text_to_pdf(content),
+            on_click="ignore",
+            file_name=f"response_{msg_idx}.pdf",
+            mime="application/pdf",
+            key=f"dl_pdf_msg_{msg_idx}",
+            help="Download this response as a PDF document",
+        )
 
 
 def render_conversation(conv: Conversation) -> None:

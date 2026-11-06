@@ -12,6 +12,7 @@ from typing import Generator
 
 from core.history import Conversation, HistoryManager
 from core.ollama_client import OllamaClient, OllamaConnectionError
+from utils.constants import APP_TITLE, MAX_HISTORY_MESSAGES
 
 
 def build_message_payload(conv: Conversation) -> list[dict[str, str]]:
@@ -20,7 +21,11 @@ def build_message_payload(conv: Conversation) -> list[dict[str, str]]:
     
     # Inject an invisible system prompt to handle PDF generation requests smoothly.
     system_prompt = (
-        "You are OFFGRID AI, a helpful assistant. If the user asks you to generate a PDF, "
+        f"You are {APP_TITLE}, a knowledgeable and helpful assistant. Give complete, informative "
+        "answers: explain the key points, include relevant details, examples or steps, and use "
+        "headings or bullet points when they make the answer easier to read. Get straight to "
+        "the answer without filler, and keep simple questions short. "
+        "If the user asks you to generate a PDF, "
         "do not say you cannot do it. The application UI handles the file creation automatically. "
         "CRITICAL: When generating content for a PDF, you must output ONLY the raw requested document content. "
         "Do NOT include any conversational filler, introductions (e.g. 'Here is your PDF'), or disclaimers "
@@ -28,7 +33,7 @@ def build_message_payload(conv: Conversation) -> list[dict[str, str]]:
     )
     payload.append({"role": "system", "content": system_prompt})
     
-    for m in conv.messages:
+    for m in conv.messages[-MAX_HISTORY_MESSAGES:]:
         if m["role"] in ("user", "assistant", "system"):
             msg = {"role": m["role"], "content": m["content"]}
             if "images" in m:

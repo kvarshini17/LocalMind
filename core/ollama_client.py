@@ -13,7 +13,7 @@ from typing import Generator, Iterable
 
 import requests
 
-from utils.constants import OLLAMA_HOST, FALLBACK_MODELS
+from utils.constants import OLLAMA_HOST, OLLAMA_KEEP_ALIVE, FALLBACK_MODELS
 
 
 class OllamaConnectionError(Exception):
@@ -56,6 +56,20 @@ class OllamaClient:
         except requests.RequestException:
             return False
 
+    def warm_up(self, model: str) -> None:
+        """
+        Load `model` into memory ahead of the first message. Ollama unloads
+        idle models, and a cold load adds 8-20s before the first token.
+        """
+        try:
+            requests.post(
+                f"{self.host}/api/generate",
+                json={"model": model, "keep_alive": OLLAMA_KEEP_ALIVE},
+                timeout=self.timeout,
+            )
+        except requests.RequestException:
+            pass
+
     # ------------------------------------------------------------------
     # Chat generation
     # ------------------------------------------------------------------
@@ -89,6 +103,7 @@ class OllamaClient:
             "model": model,
             "messages": messages,
             "stream": True,
+            "keep_alive": OLLAMA_KEEP_ALIVE,
             "options": {
                 "temperature": temperature,
                 "top_p": top_p,
@@ -145,7 +160,7 @@ class OllamaClient:
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.5,
-                max_tokens=20,
+                max_tokens=12,
             )
             # Clean up the response (remove quotes, newlines, etc.)
             title = title.strip(' \n\r\t"\'')

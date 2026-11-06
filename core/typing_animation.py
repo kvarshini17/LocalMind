@@ -16,6 +16,7 @@ import streamlit as st
 from utils.constants import DEFAULT_TYPING_SPEED_MS
 
 CURSOR = "▌"
+RENDER_INTERVAL_S = 0.05
 
 
 def render_thinking_indicator(placeholder: "st.delta_generator.DeltaGenerator") -> None:
@@ -45,29 +46,19 @@ def stream_with_typing_effect(
         The full, concatenated response text.
     """
     full_text = ""
-    buffer = ""
+    last_render = 0.0
 
     try:
         for chunk in token_generator:
-            buffer += chunk
-            # Flush whenever we accumulate a whole word (on whitespace)
-            while " " in buffer or "\n" in buffer:
-                split_idx = min(
-                    (i for i in (buffer.find(" "), buffer.find("\n")) if i != -1),
-                    default=-1,
-                )
-                if split_idx == -1:
-                    break
-                word = buffer[: split_idx + 1]
-                buffer = buffer[split_idx + 1:]
-                full_text += word
+            full_text += chunk
+            # Re-rendering the whole reply on every token makes the browser
+            # lag on long answers, so redraw at most every RENDER_INTERVAL_S.
+            now = time.monotonic()
+            if now - last_render >= RENDER_INTERVAL_S:
                 placeholder.markdown(full_text + CURSOR, unsafe_allow_html=True)
+                last_render = now
+            if typing_speed_ms:
                 time.sleep(typing_speed_ms / 1000.0)
-
-        # Flush whatever remains in the buffer after the stream ends.
-        if buffer:
-            full_text += buffer
-            placeholder.markdown(full_text + CURSOR, unsafe_allow_html=True)
 
         # Final render without the cursor.
         placeholder.markdown(full_text, unsafe_allow_html=True)

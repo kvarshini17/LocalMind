@@ -94,7 +94,6 @@ def load_settings() -> dict[str, Any]:
         "temperature": DEFAULT_TEMPERATURE,
         "max_tokens": DEFAULT_MAX_TOKENS,
         "top_p": DEFAULT_TOP_P,
-        "theme": "Dark",
         "typing_speed_ms": DEFAULT_TYPING_SPEED_MS,
         "font_size": DEFAULT_FONT_SIZE,
     }

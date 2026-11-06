@@ -93,8 +93,7 @@ def export_to_pdf(conv: Conversation) -> tuple[str, bytes]:
     for msg in conv.messages:
         speaker = "You" if msg["role"] == "user" else "Assistant"
         style = user_style if msg["role"] == "user" else assistant_style
-        text = _markdown_to_reportlab(msg["content"])
-        story.append(Paragraph(f"<b>{speaker}:</b><br/>{text}", style))
+        story.append(_safe_paragraph(msg["content"], style, f"<b>{speaker}:</b><br/>"))
 
     doc.build(story)
     filename = timestamped_filename(conv.title, "pdf")
@@ -113,8 +112,7 @@ def export_text_to_pdf(text: str) -> bytes:
     story = []
     for paragraph in text.split('\n\n'):
         if paragraph.strip():
-            safe_text = _markdown_to_reportlab(paragraph.strip())
-            story.append(Paragraph(safe_text, styles["Normal"]))
+            story.append(_safe_paragraph(paragraph.strip(), styles["Normal"]))
             story.append(Spacer(1, 0.1 * inch))
     doc.build(story)
     return buffer.getvalue()
@@ -161,8 +159,8 @@ def export_all_history(conversations: list[Conversation], fmt: str) -> tuple[str
             story.append(Paragraph(_markdown_to_reportlab(c.title), styles["Heading2"]))
             for msg in c.messages:
                 speaker = "You" if msg["role"] == "user" else "Assistant"
-                text = _markdown_to_reportlab(msg["content"])
-                story.append(Paragraph(f"<b>{speaker}:</b><br/>{text}", styles["Normal"]))
+                story.append(_safe_paragraph(msg["content"], styles["Normal"],
+                                             f"<b>{speaker}:</b><br/>"))
             story.append(Spacer(1, 0.2 * inch))
         doc.build(story)
         return f"chat-history_{stamp}.pdf", buffer.getvalue()
@@ -182,6 +180,20 @@ def export_all_history(conversations: list[Conversation], fmt: str) -> tuple[str
 
 
 import re
+
+def _safe_paragraph(text: str, style, prefix: str = "") -> Paragraph:
+    """
+    Build a Paragraph from Markdown, falling back to plain escaped text when
+    the converted markup is malformed (e.g. overlapping `*` and backticks),
+    which would otherwise make ReportLab raise and break the page.
+    `prefix` is trusted ReportLab markup placed before the text.
+    """
+    try:
+        return Paragraph(prefix + _markdown_to_reportlab(text), style)
+    except ValueError:
+        plain = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return Paragraph(prefix + plain.replace("\n", "<br/>"), style)
+
 
 def _markdown_to_reportlab(text: str) -> str:
     """Parse basic Markdown into ReportLab's mini-HTML."""

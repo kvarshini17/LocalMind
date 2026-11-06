@@ -1,12 +1,14 @@
-# 🤖 OFFGRID AI
+# 🤖 LocalMind
 
-**OFFGRID AI** is a powerful, fully local, and privacy-friendly AI assistant built with **Streamlit** and **Ollama**. It features a modern dark-mode UI, persistent chat history, ChatGPT-style typing animations, and Retrieval-Augmented Generation (RAG) allowing you to chat directly with your own PDF documents. Everything runs entirely on your machine — zero data leaves your computer.
+*Your Intelligence. Your Device. Your Privacy.*
+
+**LocalMind** is a powerful, fully local, and privacy-friendly AI assistant built with **Streamlit** and **Ollama**. It features a modern UI with light and dark themes, persistent chat history, ChatGPT-style typing animations, and Retrieval-Augmented Generation (RAG) allowing you to chat directly with your own PDF documents. Everything runs entirely on your machine — zero data leaves your computer.
 
 ---
 
 ## ✨ Features
 
-- **Modern Dark Mode UI** — rounded cards, gradient accents, smooth animations
+- **Modern Light and Dark Themes** — rounded cards, gradient accents, smooth animations
 - **Persistent Chat History** — SQLite-backed, grouped by Today / Yesterday / Last 7 Days / Older
 - **Rename, delete, and search** past conversations
 - **ChatGPT-style typing animation** with a "Thinking…" indicator
