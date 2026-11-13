@@ -15,7 +15,7 @@ from core.ollama_client import OllamaClient, OllamaConnectionError
 from utils.constants import APP_TITLE, MAX_HISTORY_MESSAGES
 
 
-def build_message_payload(conv: Conversation) -> list[dict[str, str]]:
+def build_message_payload(conv: Conversation, include_images: bool = True) -> list[dict[str, str]]:
     """Convert a Conversation's stored messages into the Ollama chat format."""
     payload = []
     
@@ -36,7 +36,7 @@ def build_message_payload(conv: Conversation) -> list[dict[str, str]]:
     for m in conv.messages[-MAX_HISTORY_MESSAGES:]:
         if m["role"] in ("user", "assistant", "system"):
             msg = {"role": m["role"], "content": m["content"]}
-            if "images" in m:
+            if include_images and "images" in m:
                 msg["images"] = m["images"]
             payload.append(msg)
     return payload
@@ -51,12 +51,14 @@ def send_user_message(
     top_p: float,
     max_tokens: int,
     images: list[str] | None = None,
+    model: str | None = None,
 ) -> Generator[str, None, None]:
     """
     Append the user's message to the conversation, then stream back the
     assistant's reply. The caller is responsible for rendering the stream
     (e.g. via typing_animation) and must call `finalize_assistant_reply`
-    once the full text has been collected.
+    once the full text has been collected. `model` overrides the chat's
+    model for this message only.
 
     Raises:
         OllamaConnectionError: propagated from the client so the UI layer
@@ -68,9 +70,15 @@ def send_user_message(
     conv.messages.append(msg)
     history.save_conversation(conv)
 
-    payload = build_message_payload(conv)
+    # A model without vision rejects the whole request if any message in the
+    # history carries an image, which would make the chat unusable.
+    model = model or conv.model
+    has_images = any("images" in m for m in conv.messages[-MAX_HISTORY_MESSAGES:])
+    payload = build_message_payload(
+        conv, include_images=has_images and client.supports_vision(model)
+    )
     yield from client.stream_chat(
-        model=conv.model,
+        model=model,
         messages=payload,
         temperature=temperature,
         top_p=top_p,

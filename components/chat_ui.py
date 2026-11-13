@@ -29,10 +29,8 @@ def inject_custom_css(font_size: str = "Medium") -> None:
     st.markdown(
         f"""
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
         html, body, [class*="css"] {{
-            font-family: 'Inter', sans-serif;
+            font-family: Inter, system-ui, 'Segoe UI', Roboto, sans-serif;
             font-size: {base_font};
         }}
 

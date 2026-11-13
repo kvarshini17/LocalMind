@@ -16,6 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Generator
 
+# Must stay above the langchain imports: it turns on Hugging Face offline mode.
+from utils.constants import (
+    CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_MODEL, VECTORSTORE_DIR,
+    UPLOADS_DIR, TOP_K_RESULTS, NO_ANSWER_MESSAGE, MAX_PDF_SIZE_MB,
+)
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -23,10 +29,6 @@ from langchain_core.documents import Document
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
-from utils.constants import (
-    CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_MODEL, VECTORSTORE_DIR,
-    UPLOADS_DIR, TOP_K_RESULTS, NO_ANSWER_MESSAGE, MAX_PDF_SIZE_MB,
-)
 from core.ollama_client import OllamaClient, OllamaConnectionError
 
 
@@ -56,7 +58,14 @@ class PDFChatEngine:
     @property
     def embeddings(self) -> HuggingFaceEmbeddings:
         if self._embeddings is None:
-            self._embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+            try:
+                self._embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+            except Exception as exc:
+                raise PDFProcessingError(
+                    f"The embedding model '{EMBEDDING_MODEL}' is not installed on "
+                    "this computer, so PDFs can't be processed. Connect to the "
+                    "internet once and run: python download_model.py"
+                ) from exc
         return self._embeddings
 
     @property
@@ -101,6 +110,7 @@ class PDFChatEngine:
             PDFProcessingError: on any extraction/validation failure.
         """
         self.validate_pdf(file_path)
+        vectorstore = self.vectorstore  # a missing model should report as itself
 
         try:
             reader = PdfReader(str(file_path))
@@ -137,14 +147,14 @@ class PDFChatEngine:
             )
 
         # Avoid duplicate embeddings: skip chunks we've already stored.
-        existing = self._existing_chunk_hashes()
+        existing = self._existing_chunk_hashes(file_path.name)
         new_docs = [
             d for d in documents if d.metadata["chunk_hash"] not in existing
         ]
         if new_docs:
             try:
-                self.vectorstore.add_documents(new_docs)
-                self.vectorstore.persist()
+                vectorstore.add_documents(new_docs)
+                vectorstore.persist()
             except Exception as exc:
                 raise PDFProcessingError(
                     f"Failed to store extracted text in the database: {exc}"
@@ -152,19 +162,38 @@ class PDFChatEngine:
 
         return len(new_docs)
 
-    def _existing_chunk_hashes(self) -> set[str]:
-        """Return the set of chunk hashes already stored, to dedupe re-uploads."""
+    def _existing_chunk_hashes(self, document_name: str) -> set[str]:
+        """Return the chunk hashes already stored for a document, to dedupe re-uploads."""
         try:
-            data = self.vectorstore.get(include=["metadatas"])
+            data = self.vectorstore.get(where={"document_name": document_name}, include=["metadatas"])
             return {m.get("chunk_hash", "") for m in data.get("metadatas", [])}
         except Exception:  # noqa: BLE001 - empty/uninitialized store
             return set()
 
+    def indexed_documents(self) -> set[str]:
+        """Names of all documents that have chunks in the vector store."""
+        data = self.vectorstore.get(include=["metadatas"])
+        return {m.get("document_name", "") for m in data.get("metadatas", [])}
+
+    def sync_with_folder(self, folder: Path) -> None:
+        """Make the vector store match the PDFs in `folder`: drop chunks of
+        files that were deleted, and index files that never got indexed."""
+        on_disk = {p.name: p for p in folder.glob("*.pdf")}
+        indexed = self.indexed_documents()
+        for name in indexed - on_disk.keys():
+            self.remove_document(name)
+        for name in on_disk.keys() - indexed:
+            try:
+                self.ingest_pdf(on_disk[name])
+            except PDFProcessingError as exc:
+                print(f"Could not index {name}: {exc}")
+
     def remove_document(self, document_name: str) -> None:
         """Delete all chunks belonging to a given document from the store."""
+        vectorstore = self.vectorstore
         try:
-            self.vectorstore.delete(where={"document_name": document_name})
-            self.vectorstore.persist()
+            vectorstore.delete(where={"document_name": document_name})
+            vectorstore.persist()
         except Exception as exc:  # noqa: BLE001
             raise PDFProcessingError(
                 f"Could not remove '{document_name}' from the vector store: {exc}"
@@ -173,21 +202,37 @@ class PDFChatEngine:
     # ------------------------------------------------------------------
     # Retrieval + generation
     # ------------------------------------------------------------------
-    def retrieve(self, query: str, k: int = TOP_K_RESULTS) -> list[RetrievedChunk]:
-        """Retrieve the top-k most relevant chunks for a query."""
+    def retrieve(
+        self, query: str, k: int = TOP_K_RESULTS, document_names: list[str] | None = None
+    ) -> list[RetrievedChunk]:
+        """Retrieve the top-k most relevant chunks for a query, optionally
+        only from the named documents."""
+        search_filter = {"document_name": {"$in": document_names}} if document_names else None
+        vectorstore = self.vectorstore
         try:
-            results = self.vectorstore.similarity_search(query, k=k)
+            results = vectorstore.similarity_search(query, k=k, filter=search_filter)
         except Exception as exc:  # noqa: BLE001 - e.g. empty collection
             print(f"Retrieval error: {exc}")
             return []
-        return [
-            RetrievedChunk(
-                content=doc.page_content,
-                document_name=doc.metadata.get("document_name", "unknown"),
-                page_number=doc.metadata.get("page_number", 0),
-            )
-            for doc in results
-        ]
+        return [self._to_chunk(doc.page_content, doc.metadata) for doc in results]
+
+    def _opening_chunks(self, document_name: str, count: int = 2) -> list[RetrievedChunk]:
+        """Return a document's first chunks. Requests like "summarize this"
+        share no words with the text, so similarity search alone can miss them."""
+        try:
+            data = self.vectorstore.get(where={"document_name": document_name}, limit=count)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Retrieval error: {exc}")
+            return []
+        return [self._to_chunk(c, m) for c, m in zip(data["documents"], data["metadatas"])]
+
+    @staticmethod
+    def _to_chunk(content: str, metadata: dict) -> RetrievedChunk:
+        return RetrievedChunk(
+            content=content,
+            document_name=metadata.get("document_name", "unknown"),
+            page_number=metadata.get("page_number", 0),
+        )
 
     def answer_question(
         self,
@@ -198,12 +243,16 @@ class PDFChatEngine:
         top_p: float = 0.9,
         max_tokens: int = 1024,
         history_messages: list[dict[str, str]] | None = None,
+        document_names: list[str] | None = None,
     ) -> tuple[Generator[str, None, None], list[RetrievedChunk]]:
         """
         Search the vectorstore for `query`, build a RAG prompt (including conversation history if provided),
-        and yield the assistant's streamed response.
+        and yield the assistant's streamed response. `document_names` limits the
+        search to those documents; otherwise every uploaded PDF is searched.
         """
-        chunks = self.retrieve(query)
+        chunks = self.retrieve(query, document_names=document_names)
+        for name in document_names or []:
+            chunks += [c for c in self._opening_chunks(name) if c not in chunks]
         if not chunks:
             def _no_answer() -> Generator[str, None, None]:
                 yield NO_ANSWER_MESSAGE
@@ -214,16 +263,21 @@ class PDFChatEngine:
             for c in chunks
         )
         system_prompt = (
-            "You are a helpful assistant that answers questions using ONLY "
-            "the provided document excerpts. If the excerpts don't contain "
-            f"the answer, respond exactly with: \"{NO_ANSWER_MESSAGE}\". "
+            "You are a helpful assistant that answers questions about the user's "
+            "PDF documents using ONLY the excerpts in the Context. Requests like "
+            "'summarize this', 'explain this' or 'what is this about' refer to those "
+            "documents, so answer them from the excerpts. Only if the excerpts have "
+            f"nothing to do with the question, respond exactly with: \"{NO_ANSWER_MESSAGE}\". "
             "Cite the document name and page number when relevant."
         )
         messages = [
             {"role": "system", "content": system_prompt},
         ]
         if history_messages:
-            messages.extend(history_messages[-6:])
+            messages.extend(
+                {"role": m["role"], "content": m["content"]} for m in history_messages[-6:]
+                if m["content"] != NO_ANSWER_MESSAGE  # an old refusal invites another
+            )
         messages.append(
             {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"}
         )

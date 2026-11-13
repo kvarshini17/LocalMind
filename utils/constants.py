@@ -10,6 +10,16 @@ import os
 from pathlib import Path
 
 # --------------------------------------------------------------------------
+# Offline operation
+# --------------------------------------------------------------------------
+# Hugging Face otherwise contacts huggingface.co on every model load, even
+# when the model is cached, and fails without a network. These are read when
+# the libraries are imported, so this must run before they are.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")  # ChromaDB
+
+# --------------------------------------------------------------------------
 # Base paths (all relative to project root, no hardcoded absolute paths)
 # --------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -33,6 +43,8 @@ for _dir in (DATABASE_DIR, UPLOADS_DIR, EXPORTS_DIR, VECTORSTORE_DIR):
 # first, which Ollama doesn't listen on, adding ~2s to every request.
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 DEFAULT_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", "llama3.2:3b")
+# Suggested when an image is attached but no installed model can read images.
+SUGGESTED_VISION_MODEL = "moondream"
 # How long Ollama keeps the model in memory after a request. The default
 # (5m) means the first message after a short break pays a full reload.
 OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "30m")

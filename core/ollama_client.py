@@ -48,6 +48,19 @@ class OllamaClient:
         except (requests.RequestException, ValueError, KeyError):
             return FALLBACK_MODELS
 
+    def supports_vision(self, model: str) -> bool:
+        """Check whether an installed model can read images."""
+        try:
+            resp = requests.post(f"{self.host}/api/show", json={"model": model}, timeout=10)
+            resp.raise_for_status()
+            return "vision" in resp.json().get("capabilities", [])
+        except (requests.RequestException, ValueError):
+            return False
+
+    def find_vision_model(self) -> str | None:
+        """Return the first installed model that can read images, if any."""
+        return next((m for m in self.list_models() if self.supports_vision(m)), None)
+
     def is_server_available(self) -> bool:
         """Check whether the Ollama server is reachable at all."""
         try:
@@ -122,7 +135,13 @@ class OllamaClient:
                         f"Model '{model}' was not found. Please pull it first "
                         f"with: ollama pull {model}"
                     )
-                resp.raise_for_status()
+                if not resp.ok:
+                    # Ollama explains failures in the body; raise_for_status drops it.
+                    try:
+                        detail = resp.json().get("error", resp.text)
+                    except ValueError:
+                        detail = resp.text
+                    raise OllamaConnectionError(f"Ollama error: {detail}")
                 for line in resp.iter_lines():
                     if not line:
                         continue

@@ -161,12 +161,15 @@ def _render_pdf_manager(pdf_engine: PDFChatEngine) -> None:
                 col1.markdown(f"📄 {pdf_path.name}  \n<span class='muted-text' style='font-size:0.8em'>{size}</span>",
                                unsafe_allow_html=True)
                 if col2.button("🗑️", key=f"del_pdf_{pdf_path.name}"):
+                    # Keep the file if its chunks can't be removed, so the list
+                    # and the search index stay in step.
                     try:
                         pdf_engine.remove_document(pdf_path.name)
                     except PDFProcessingError as exc:
                         st.error(str(exc))
-                    pdf_path.unlink(missing_ok=True)
-                    st.rerun()
+                    else:
+                        pdf_path.unlink(missing_ok=True)
+                        st.rerun()
 
             if st.button("💬 Chat with PDFs", use_container_width=True):
                 st.session_state.pdf_mode = True

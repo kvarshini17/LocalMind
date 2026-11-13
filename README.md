@@ -93,7 +93,16 @@ ollama pull gemma
 Make sure the Ollama server is running (it usually starts automatically,
 or run `ollama serve`).
 
-### 6. Run the application
+### 6. Download the PDF embedding model
+
+```bash
+python download_model.py
+```
+
+This is the only step besides `ollama pull` that needs the internet. After
+it, the app runs fully offline.
+
+### 7. Run the application
 
 ```bash
 streamlit run app.py
@@ -160,8 +169,11 @@ Close any other process that might have `database/chats.db` open, or
 simply retry — SQLite write conflicts are transient.
 
 **Slow first response after uploading a PDF**
-The sentence-transformers embedding model is downloaded and loaded lazily
-on first use; subsequent uploads are faster.
+The sentence-transformers embedding model is loaded lazily on first use;
+subsequent uploads are faster.
+
+**"The embedding model ... is not installed on this computer"**
+Connect to the internet once and run `python download_model.py`.
 
 ---
 

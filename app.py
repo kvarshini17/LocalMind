@@ -19,7 +19,7 @@ from core.history import HistoryManager
 from core.ollama_client import OllamaClient, OllamaConnectionError
 from core.pdf_chat import PDFChatEngine, PDFProcessingError
 from core.typing_animation import render_thinking_indicator, stream_with_typing_effect
-from utils.constants import APP_TITLE, UPLOADS_DIR
+from utils.constants import APP_TITLE, SUGGESTED_VISION_MODEL, UPLOADS_DIR
 from utils.file_utils import load_settings
 st.set_page_config(
     page_title=APP_TITLE,
@@ -44,7 +44,14 @@ def get_ollama_client() -> OllamaClient:
 
 @st.cache_resource
 def get_pdf_engine() -> PDFChatEngine:
-    return PDFChatEngine()
+    engine = PDFChatEngine()
+    try:
+        # A delete that failed half-way can leave chunks of a removed PDF,
+        # which would then show up in answers.
+        engine.sync_with_folder(UPLOADS_DIR)
+    except PDFProcessingError as exc:  # e.g. embedding model not installed
+        print(f"Skipped PDF index check: {exc}")
+    return engine
 
 
 @st.cache_resource
@@ -86,7 +93,8 @@ def main() -> None:
         conv = history.create_conversation(model=settings["model"])
         st.session_state.current_conv_id = conv.id
 
-    mode_label = "📄 PDF Chat" if st.session_state.pdf_mode else "💬 Chat"
+    chat_pdfs = _chat_documents(conv)
+    mode_label = "📄 PDF Chat" if st.session_state.pdf_mode or chat_pdfs else "💬 Chat"
     st.markdown(f"#### {mode_label} · *{conv.title}*")
 
     if not conv.messages:
@@ -127,39 +135,40 @@ def main() -> None:
         files = []
     
     base64_images = []
+    attached_pdfs = []
     if files:
         for uploaded in files:
             if uploaded.name.lower().endswith(".pdf") or uploaded.type == "application/pdf":
                 dest = UPLOADS_DIR / uploaded.name
-                if not dest.exists():
-                    dest.write_bytes(uploaded.getbuffer())
-                    try:
-                        with st.spinner(f"Processing {uploaded.name}…"):
-                            n_chunks = pdf_engine.ingest_pdf(dest)
-                        st.success(f"✅ {uploaded.name} indexed ({n_chunks} chunks).")
-                    except PDFProcessingError as exc:
-                        st.error(str(exc))
-                        dest.unlink(missing_ok=True)
-                        continue
-                else:
-                    st.success(f"✅ {uploaded.name} already indexed and ready.")
-                st.session_state.pdf_mode = True
+                dest.write_bytes(uploaded.getbuffer())
+                try:
+                    with st.spinner(f"Processing {uploaded.name}…"):
+                        # Replace any earlier upload with the same name.
+                        pdf_engine.remove_document(uploaded.name)
+                        pdf_engine.ingest_pdf(dest)
+                except PDFProcessingError as exc:
+                    st.error(str(exc))
+                    dest.unlink(missing_ok=True)
+                    continue
+                attached_pdfs.append(uploaded.name)
             elif uploaded.type.startswith("image/") or uploaded.name.lower().endswith((".png", ".jpg", ".jpeg")):
                 b64 = base64.b64encode(uploaded.getvalue()).decode("utf-8")
                 base64_images.append(b64)
 
-    if text or base64_images:
+    if text or base64_images or attached_pdfs:
         if not text:
-            text = "What is in this image?"
-        _handle_user_turn(text, conv, history, ollama_client, pdf_engine, settings, base64_images)
+            text = "Describe this image." if base64_images else "Summarize this PDF and list its key points."
+        _handle_user_turn(text, conv, history, ollama_client, pdf_engine, settings, base64_images, attached_pdfs)
     elif st.session_state.get("trigger_pdf_analysis"):
         st.session_state.trigger_pdf_analysis = False
-        if not conv.messages:
-            # If it's a completely new chat, just start the analysis
-            _handle_user_turn("I have uploaded a PDF. Please analyze it and summarize its key contents.", conv, history, ollama_client, pdf_engine, settings, [])
-        else:
-            # If it's an existing chat, append the analysis request
-            _handle_user_turn("Please analyze the uploaded PDF document and summarize its key contents.", conv, history, ollama_client, pdf_engine, settings, [])
+        # Worded with care: llama3.2 answered "I have uploaded a PDF. Please
+        # analyze it..." with the no-answer message 3 times in 4.
+        _handle_user_turn("Please analyze the uploaded PDF document and summarize its key contents.", conv, history, ollama_client, pdf_engine, settings, [])
+
+
+def _chat_documents(conv) -> list[str]:
+    """Names of the PDFs attached to this chat with the + button."""
+    return list(dict.fromkeys(name for m in conv.messages for name in m.get("documents", [])))
 
 
 def _handle_user_turn(
@@ -170,16 +179,37 @@ def _handle_user_turn(
     pdf_engine: PDFChatEngine,
     settings: dict,
     images: list[str] | None = None,
+    attached_pdfs: list[str] | None = None,
 ) -> None:
     """Handle a single round-trip: render the user's message, stream the
     assistant's reply with a typing effect, and persist everything."""
+    # Vision models can be poor at plain text, so one is only used for the
+    # message carrying the image and the chat keeps its own model.
+    turn_model = conv.model
+    if images and not ollama_client.supports_vision(conv.model):
+        turn_model = ollama_client.find_vision_model()
+        if turn_model is None:
+            st.error(
+                f"**{conv.model}** can't read images, and no installed model can. "
+                f"Install one by running `ollama pull {SUGGESTED_VISION_MODEL}` in a terminal, "
+                "then attach the image again."
+            )
+            return
+        st.info(f"Using **{turn_model}** for this image because **{conv.model}** can't read images.")
+
     chat_ui.render_message("user", user_input)
 
     placeholder = st.empty()
     render_thinking_indicator(placeholder)
 
     try:
-        if st.session_state.pdf_mode:
+        # PDF answers only use document text, so images go through normal chat.
+        documents = _chat_documents(conv) + (attached_pdfs or [])
+        new_documents = attached_pdfs
+        if st.session_state.pdf_mode and not documents:
+            # "Chat with PDFs" in the sidebar: the PDFs listed there.
+            documents = new_documents = sorted(p.name for p in UPLOADS_DIR.glob("*.pdf"))
+        if (st.session_state.pdf_mode or documents) and not images:
             generator, sources = pdf_engine.answer_question(
                 query=user_input,
                 model=conv.model,
@@ -188,8 +218,13 @@ def _handle_user_turn(
                 top_p=settings["top_p"],
                 max_tokens=settings["max_tokens"],
                 history_messages=conv.messages,
+                document_names=documents or None,
             )
-            conv.messages.append({"role": "user", "content": user_input})
+            user_message = {"role": "user", "content": user_input}
+            if new_documents:
+                # Remembered so the chat stays on these PDFs when reopened.
+                user_message["documents"] = new_documents
+            conv.messages.append(user_message)
             full_text = stream_with_typing_effect(
                 placeholder, generator, settings["typing_speed_ms"]
             )
@@ -204,10 +239,16 @@ def _handle_user_turn(
                 top_p=settings["top_p"],
                 max_tokens=settings["max_tokens"],
                 images=images,
+                model=turn_model,
             )
             full_text = stream_with_typing_effect(
                 placeholder, generator, settings["typing_speed_ms"]
             )
+            if not full_text.strip():
+                full_text = (
+                    f"**{turn_model}** returned an empty reply. "
+                    "Try asking in a different way, such as \"Describe this image.\""
+                )
             finalize_assistant_reply(conv, full_text, history)
             placeholder.empty()
             chat_ui.render_message("assistant", full_text, msg_idx=len(conv.messages)-1)
